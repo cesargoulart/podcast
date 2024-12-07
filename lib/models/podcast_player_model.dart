@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
+import 'package:audio_session/audio_session.dart';
+import 'dart:developer' as developer;
 import 'podcast.dart';
 import 'episode.dart';
 
@@ -14,20 +17,54 @@ class PodcastPlayerModel extends ChangeNotifier {
   Duration _position = Duration.zero;
   String? _currentPodcast;
   bool _isLoading = false;
+  Episode? _currentEpisode;
 
   PodcastPlayerModel() {
-    _audioPlayer.durationStream.listen((d) {
-      _duration = d ?? Duration.zero;
-      notifyListeners();
-    });
-    _audioPlayer.positionStream.listen((p) {
-      _position = p;
-      notifyListeners();
-    });
-    _audioPlayer.playerStateStream.listen((state) {
-      _isPlaying = state.playing;
-      notifyListeners();
-    });
+    _initAudioPlayer();
+  }
+
+  Future<void> _initAudioPlayer() async {
+    try {
+      // Configure the audio session
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      
+      // Listen to audio player state changes
+      _audioPlayer.playerStateStream.listen((state) {
+        _isPlaying = state.playing;
+        developer.log('Player state changed: ${state.playing ? "playing" : "paused"}');
+        notifyListeners();
+      });
+
+      _audioPlayer.positionStream.listen((pos) {
+        _position = pos;
+        notifyListeners();
+      });
+
+      _audioPlayer.durationStream.listen((dur) {
+        _duration = dur ?? Duration.zero;
+        notifyListeners();
+      });
+
+      _audioPlayer.processingStateStream.listen((state) {
+        developer.log('Processing state: $state');
+        if (state == ProcessingState.completed) {
+          _position = Duration.zero;
+          _isPlaying = false;
+          notifyListeners();
+        }
+      });
+
+      // Listen for errors
+      _audioPlayer.playbackEventStream.listen(
+        (event) {},
+        onError: (Object e, StackTrace st) {
+          developer.log('A stream error occurred: $e', error: e, stackTrace: st);
+        },
+      );
+    } catch (e, st) {
+      developer.log('Error initializing audio player: $e', error: e, stackTrace: st);
+    }
   }
 
   bool get isPlaying => _isPlaying;
@@ -37,6 +74,7 @@ class PodcastPlayerModel extends ChangeNotifier {
   List<Podcast> get podcasts => List.unmodifiable(_podcasts);
   List<Episode>? get currentEpisodes => _currentEpisodes;
   bool get isLoading => _isLoading;
+  Episode? get currentEpisode => _currentEpisode;
 
   void clearEpisodes() {
     _currentEpisodes = null;
@@ -62,11 +100,14 @@ class PodcastPlayerModel extends ChangeNotifier {
         _currentEpisodes = items.map((item) {
           final enclosure = item.findElements('enclosure').firstOrNull;
           final duration = item.findElements('itunes:duration').firstOrNull?.text ?? '0:00';
+          final audioUrl = enclosure?.getAttribute('url') ?? '';
+          
+          developer.log('Found episode with audio URL: $audioUrl');
           
           return Episode(
             title: item.findElements('title').firstOrNull?.text ?? 'Untitled Episode',
             description: item.findElements('description').firstOrNull?.text ?? 'No description available',
-            audioUrl: enclosure?.getAttribute('url') ?? '',
+            audioUrl: audioUrl,
             duration: _parseDuration(duration),
             publishDate: DateTime.tryParse(
               item.findElements('pubDate').firstOrNull?.text ?? DateTime.now().toIso8601String()
@@ -74,14 +115,13 @@ class PodcastPlayerModel extends ChangeNotifier {
           );
         }).toList();
 
-        // Sort episodes by publish date (newest first)
         _currentEpisodes!.sort((a, b) => b.publishDate.compareTo(a.publishDate));
       } else {
-        debugPrint('Failed to load podcast feed: ${response.statusCode}');
+        developer.log('Failed to load podcast feed: ${response.statusCode}');
         _currentEpisodes = [];
       }
-    } catch (e) {
-      debugPrint('Error loading podcast feed: $e');
+    } catch (e, st) {
+      developer.log('Error loading podcast feed: $e', error: e, stackTrace: st);
       _currentEpisodes = [];
     }
 
@@ -89,9 +129,119 @@ class PodcastPlayerModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> playEpisode(Episode episode) async {
+    try {
+      developer.log('Starting playback of episode: ${episode.title}');
+      developer.log('Audio URL: ${episode.audioUrl}');
+      
+      if (episode.audioUrl.isEmpty) {
+        developer.log('Error: Empty audio URL');
+        return;
+      }
+
+      // Validate URL
+      final uri = Uri.parse(episode.audioUrl);
+      if (!uri.isAbsolute) {
+        developer.log('Error: Invalid audio URL - not absolute');
+        return;
+      }
+
+      _currentEpisode = episode;
+      _currentPodcast = episode.title;
+      
+      await _audioPlayer.stop();
+      
+      // Configure audio session before playing
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      
+      developer.log('Setting audio source...');
+      // Set the audio source and prepare it
+      final duration = await _audioPlayer.setAudioSource(
+        AudioSource.uri(
+          uri,
+          tag: MediaItem(
+            id: episode.audioUrl,
+            album: _currentPodcast ?? 'Unknown Podcast',
+            title: episode.title,
+            artUri: null,
+          ),
+        ),
+      );
+      
+      if (duration != null) {
+        _duration = duration;
+        developer.log('Audio duration: ${duration.inSeconds} seconds');
+      }
+      
+      developer.log('Starting playback...');
+      // Start playback
+      await _audioPlayer.play();
+      _isPlaying = true;
+      notifyListeners();
+      
+      developer.log('Playback started successfully');
+    } catch (e, st) {
+      developer.log('Error playing episode: $e', error: e, stackTrace: st);
+      // Reset state on error
+      _currentEpisode = null;
+      _currentPodcast = null;
+      _isPlaying = false;
+      notifyListeners();
+      
+      // Show error to user
+      debugPrint('Failed to play episode: $e');
+    }
+  }
+
+  Future<void> togglePlayPause() async {
+    try {
+      if (_currentEpisode == null) return;
+
+      if (_isPlaying) {
+        await _audioPlayer.pause();
+      } else {
+        await _audioPlayer.play();
+      }
+    } catch (e, st) {
+      developer.log('Error toggling play/pause: $e', error: e, stackTrace: st);
+    }
+  }
+
+  Future<void> seek(double seconds) async {
+    try {
+      await _audioPlayer.seek(Duration(seconds: seconds.toInt()));
+    } catch (e, st) {
+      developer.log('Error seeking: $e', error: e, stackTrace: st);
+    }
+  }
+
+  Future<void> forward() async {
+    try {
+      final newPosition = _position + const Duration(seconds: 10);
+      if (newPosition <= _duration) {
+        await _audioPlayer.seek(newPosition);
+      }
+    } catch (e, st) {
+      developer.log('Error forwarding: $e', error: e, stackTrace: st);
+    }
+  }
+
+  Future<void> rewind() async {
+    try {
+      final newPosition = _position - const Duration(seconds: 10);
+      if (newPosition >= Duration.zero) {
+        await _audioPlayer.seek(newPosition);
+      } else {
+        await _audioPlayer.seek(Duration.zero);
+      }
+    } catch (e, st) {
+      developer.log('Error rewinding: $e', error: e, stackTrace: st);
+    }
+  }
+
   Duration _parseDuration(String duration) {
     try {
-      // Handle different duration formats
       if (duration.contains(':')) {
         final parts = duration.split(':').map(int.parse).toList();
         if (parts.length == 3) {
@@ -102,50 +252,10 @@ class PodcastPlayerModel extends ChangeNotifier {
       } else {
         return Duration(seconds: int.tryParse(duration) ?? 0);
       }
-    } catch (e) {
-      debugPrint('Error parsing duration: $e');
+    } catch (e, st) {
+      developer.log('Error parsing duration: $e', error: e, stackTrace: st);
     }
     return Duration.zero;
-  }
-
-  Future<void> loadPodcast(String url, String title) async {
-    try {
-      await _audioPlayer.setUrl(url);
-      _currentPodcast = title;
-      notifyListeners();
-    } catch (e) {
-      debugPrint("Error loading podcast: $e");
-    }
-  }
-
-  Future<void> playEpisode(Episode episode) async {
-    try {
-      await _audioPlayer.setUrl(episode.audioUrl);
-      _currentPodcast = episode.title;
-      _audioPlayer.play();
-    } catch (e) {
-      debugPrint('Error playing episode: $e');
-    }
-  }
-
-  void togglePlayPause() {
-    if (_isPlaying) {
-      _audioPlayer.pause();
-    } else {
-      _audioPlayer.play();
-    }
-  }
-
-  void seek(double seconds) {
-    _audioPlayer.seek(Duration(seconds: seconds.toInt()));
-  }
-
-  void forward() {
-    _audioPlayer.seek(position + const Duration(seconds: 10));
-  }
-
-  void rewind() {
-    _audioPlayer.seek(position - const Duration(seconds: 10));
   }
 
   @override

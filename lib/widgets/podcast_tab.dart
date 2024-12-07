@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/podcast_player_model.dart';
+import '../models/episode.dart';
 
 class PodcastTab extends StatelessWidget {
   const PodcastTab({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final playerModel = Provider.of<PodcastPlayerModel>(context);
-
     return Container(
       width: 200,
       color: Colors.grey[200],
@@ -19,29 +18,57 @@ class PodcastTab extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             color: Colors.blue,
             child: const Text(
-              "Podcasts",
-              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              "Now Playing",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold
+              ),
               textAlign: TextAlign.center,
             ),
           ),
-          ListTile(
-            title: const Text("Sample Podcast"),
-            onTap: () {
-              playerModel.loadPodcast(
-                "https://example.com/sample_podcast.mp3",
-                "Sample Podcast",
-              );
-            },
-          ),
-          const Divider(),
-          ListTile(
-            title: const Text("Another Podcast"),
-            onTap: () {
-              playerModel.loadPodcast(
-                "https://example.com/another_podcast.mp3",
-                "Another Podcast",
-              );
-            },
+          Expanded(
+            child: Consumer<PodcastPlayerModel>(
+              builder: (context, model, child) {
+                final currentEpisode = model.currentEpisode;
+                if (currentEpisode == null) {
+                  return const Center(
+                    child: Text(
+                      "No episode playing",
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  );
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        currentEpisode.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        currentEpisode.description,
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 14,
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
         ],
       ),
