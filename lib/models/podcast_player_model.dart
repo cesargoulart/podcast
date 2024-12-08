@@ -4,6 +4,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:audio_service/audio_service.dart';
 import 'dart:developer' as developer;
 import 'podcast.dart';
 import 'episode.dart';
@@ -28,11 +29,12 @@ class PodcastPlayerModel extends ChangeNotifier {
       // Configure the audio session
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
-      
+
       // Listen to audio player state changes
       _audioPlayer.playerStateStream.listen((state) {
         _isPlaying = state.playing;
-        developer.log('Player state changed: ${state.playing ? "playing" : "paused"}');
+        developer.log(
+            'Player state changed: ${state.playing ? "playing" : "paused"}');
         notifyListeners();
       });
 
@@ -59,11 +61,13 @@ class PodcastPlayerModel extends ChangeNotifier {
       _audioPlayer.playbackEventStream.listen(
         (event) {},
         onError: (Object e, StackTrace st) {
-          developer.log('A stream error occurred: $e', error: e, stackTrace: st);
+          developer.log('A stream error occurred: $e',
+              error: e, stackTrace: st);
         },
       );
     } catch (e, st) {
-      developer.log('Error initializing audio player: $e', error: e, stackTrace: st);
+      developer.log('Error initializing audio player: $e',
+          error: e, stackTrace: st);
     }
   }
 
@@ -96,26 +100,33 @@ class PodcastPlayerModel extends ChangeNotifier {
       if (response.statusCode == 200) {
         final document = XmlDocument.parse(response.body);
         final items = document.findAllElements('item');
-        
+
         _currentEpisodes = items.map((item) {
           final enclosure = item.findElements('enclosure').firstOrNull;
-          final duration = item.findElements('itunes:duration').firstOrNull?.text ?? '0:00';
+          final duration =
+              item.findElements('itunes:duration').firstOrNull?.text ?? '0:00';
           final audioUrl = enclosure?.getAttribute('url') ?? '';
-          
-          developer.log('Found episode with audio URL: $audioUrl');
-          
+
+          // Log the extracted audio URL
+          developer.log(
+              'Extracted audio URL: $audioUrl for episode: ${item.findElements("title").firstOrNull?.text}');
+
           return Episode(
-            title: item.findElements('title').firstOrNull?.text ?? 'Untitled Episode',
-            description: item.findElements('description').firstOrNull?.text ?? 'No description available',
+            title: item.findElements('title').firstOrNull?.text ??
+                'Untitled Episode',
+            description: item.findElements('description').firstOrNull?.text ??
+                'No description available',
             audioUrl: audioUrl,
             duration: _parseDuration(duration),
             publishDate: DateTime.tryParse(
-              item.findElements('pubDate').firstOrNull?.text ?? DateTime.now().toIso8601String()
-            ) ?? DateTime.now(),
+                    item.findElements('pubDate').firstOrNull?.text ??
+                        DateTime.now().toIso8601String()) ??
+                DateTime.now(),
           );
         }).toList();
 
-        _currentEpisodes!.sort((a, b) => b.publishDate.compareTo(a.publishDate));
+        _currentEpisodes!
+            .sort((a, b) => b.publishDate.compareTo(a.publishDate));
       } else {
         developer.log('Failed to load podcast feed: ${response.statusCode}');
         _currentEpisodes = [];
@@ -131,66 +142,29 @@ class PodcastPlayerModel extends ChangeNotifier {
 
   Future<void> playEpisode(Episode episode) async {
     try {
-      developer.log('Starting playback of episode: ${episode.title}');
-      developer.log('Audio URL: ${episode.audioUrl}');
-      
-      if (episode.audioUrl.isEmpty) {
-        developer.log('Error: Empty audio URL');
-        return;
-      }
-
-      // Validate URL
-      final uri = Uri.parse(episode.audioUrl);
-      if (!uri.isAbsolute) {
-        developer.log('Error: Invalid audio URL - not absolute');
-        return;
-      }
-
       _currentEpisode = episode;
-      _currentPodcast = episode.title;
-      
-      await _audioPlayer.stop();
-      
-      // Configure audio session before playing
-      final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
-      
-      developer.log('Setting audio source...');
-      // Set the audio source and prepare it
-      final duration = await _audioPlayer.setAudioSource(
+      developer.log('Playing episode: ${episode.title} from URL: ${episode.audioUrl}');
+
+      // Set the audio source with metadata for background playback
+      await _audioPlayer.setAudioSource(
         AudioSource.uri(
-          uri,
+          Uri.parse(episode.audioUrl),
           tag: MediaItem(
             id: episode.audioUrl,
-            album: _currentPodcast ?? 'Unknown Podcast',
+            album: "Podcast",
             title: episode.title,
             artUri: null,
           ),
         ),
       );
       
-      if (duration != null) {
-        _duration = duration;
-        developer.log('Audio duration: ${duration.inSeconds} seconds');
-      }
-      
-      developer.log('Starting playback...');
-      // Start playback
+      developer.log('Audio source set successfully');
       await _audioPlayer.play();
-      _isPlaying = true;
-      notifyListeners();
-      
       developer.log('Playback started successfully');
+      
+      notifyListeners();
     } catch (e, st) {
       developer.log('Error playing episode: $e', error: e, stackTrace: st);
-      // Reset state on error
-      _currentEpisode = null;
-      _currentPodcast = null;
-      _isPlaying = false;
-      notifyListeners();
-      
-      // Show error to user
-      debugPrint('Failed to play episode: $e');
     }
   }
 
@@ -245,7 +219,8 @@ class PodcastPlayerModel extends ChangeNotifier {
       if (duration.contains(':')) {
         final parts = duration.split(':').map(int.parse).toList();
         if (parts.length == 3) {
-          return Duration(hours: parts[0], minutes: parts[1], seconds: parts[2]);
+          return Duration(
+              hours: parts[0], minutes: parts[1], seconds: parts[2]);
         } else if (parts.length == 2) {
           return Duration(minutes: parts[0], seconds: parts[1]);
         }

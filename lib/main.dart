@@ -10,17 +10,18 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
-    developer.log('Initializing audio background service...');
     await JustAudioBackground.init(
       androidNotificationChannelId: 'com.example.podcast.channel.audio',
-      androidNotificationChannelName: 'Podcast Audio',
+      androidNotificationChannelName: 'Audio Playback',
       androidNotificationOngoing: true,
+      preloadArtwork: true,
       androidShowNotificationBadge: true,
-      androidStopForegroundOnPause: true,
+      notificationColor: const Color(0xFF2196F3),
     );
-    developer.log('Audio background service initialized successfully');
-  } catch (e, st) {
-    developer.log('Error initializing audio background service', error: e, stackTrace: st);
+    
+    developer.log('JustAudioBackground initialized successfully');
+  } catch (e) {
+    developer.log('Error initializing JustAudioBackground: $e');
   }
 
   runApp(const MyApp());
